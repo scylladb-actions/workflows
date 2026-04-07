@@ -1,0 +1,81 @@
+name: Milestone Sync
+
+on:
+  workflow_call:
+    inputs:
+      milestone:
+        description: GitHub milestone number or exact title
+        required: true
+        type: string
+      config-path:
+        description: Path to the milestone-sync config file in the caller repository
+        required: false
+        default: milestone-sync/config.yaml
+        type: string
+      node-version:
+        description: Node.js version used to run the sync tool
+        required: false
+        default: "20"
+        type: string
+      tool-ref:
+        description: Ref of dkropachev/jira to checkout for the reusable workflow support files
+        required: false
+        default: main
+        type: string
+    secrets:
+      USER_AND_KEY_FOR_JIRA_AUTOMATION:
+        required: true
+
+permissions:
+  contents: read
+  issues: write
+  pull-requests: read
+
+jobs:
+  sync-milestone:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout caller repository
+        uses: actions/checkout@v5
+        with:
+          path: caller-repo
+
+      - name: Checkout workflow repository
+        uses: actions/checkout@v5
+        with:
+          repository: dkropachev/jira
+          ref: ${{ inputs.tool-ref }}
+          path: workflow-repo
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v5
+        with:
+          node-version: ${{ inputs.node-version }}
+          cache: npm
+          cache-dependency-path: workflow-repo/.github/workflows/package-lock.json
+
+      - name: Install tool dependencies
+        working-directory: workflow-repo/.github/workflows
+        run: npm ci
+
+      - name: Validate caller config file
+        env:
+          CONFIG_PATH: ${{ github.workspace }}/caller-repo/${{ inputs.config-path }}
+        run: |
+          if [ ! -f "$CONFIG_PATH" ]; then
+            echo "Config file not found: $CONFIG_PATH" >&2
+            echo "Set 'config-path' to a file in the caller repository, for example 'milestone-sync/config.yaml'." >&2
+            exit 1
+          fi
+
+      - name: Sync milestone to Jira
+        working-directory: workflow-repo/.github/workflows
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          USER_AND_KEY_FOR_JIRA_AUTOMATION: ${{ secrets.USER_AND_KEY_FOR_JIRA_AUTOMATION }}
+        run: |
+          node milestone-sync.js sync \
+            --config "${{ github.workspace }}/caller-repo/${{ inputs.config-path }}" \
+            --milestone "${{ inputs.milestone }}"

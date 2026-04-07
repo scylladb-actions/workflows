@@ -1,0 +1,13 @@
+{
+  "name": "jira-milestone-sync",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "sync": "node milestone-sync.js",
+    "test": "node --test milestone-sync.test.js"
+  },
+  "dependencies": {
+    "yaml": "^2.8.1"
+  }
+}
