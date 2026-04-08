@@ -11,6 +11,14 @@ const GITHUB_MARKER_START = '<!-- jira-milestone-sync:start -->';
 const GITHUB_MARKER_END = '<!-- jira-milestone-sync:end -->';
 const JIRA_BASE_URL = 'https://scylladb.atlassian.net';
 
+function buildLegacyGitHubManagedBlockPattern() {
+  return new RegExp(`${escapeRegExp(GITHUB_MARKER_START)}([\\s\\S]*?)${escapeRegExp(GITHUB_MARKER_END)}`);
+}
+
+function buildGitHubManagedBlockToEndPattern(flags = '') {
+  return new RegExp(`${escapeRegExp(GITHUB_MARKER_START)}([\\s\\S]*)$`, flags);
+}
+
 function usage() {
   return [
     'Usage:',
@@ -700,8 +708,8 @@ export function extractGitHubManagedBlock(text) {
   if (!text) {
     return null;
   }
-  const pattern = new RegExp(`${escapeRegExp(GITHUB_MARKER_START)}([\\s\\S]*?)${escapeRegExp(GITHUB_MARKER_END)}`);
-  const match = text.match(pattern);
+  const match = text.match(buildLegacyGitHubManagedBlockPattern())
+    ?? text.match(buildGitHubManagedBlockToEndPattern());
   return match ? match[1].trim() : null;
 }
 
@@ -711,6 +719,7 @@ export function stripGitHubManagedBlock(text) {
   }
   return text
     .replace(new RegExp(`\\n?${escapeRegExp(GITHUB_MARKER_START)}[\\s\\S]*?${escapeRegExp(GITHUB_MARKER_END)}\\n?`, 'g'), '\n')
+    .replace(new RegExp(`\\n?${escapeRegExp(GITHUB_MARKER_START)}[\\s\\S]*$`, 'g'), '\n')
     .replace(/\n{3,}/g, '\n\n')
     .trim();
 }
@@ -741,7 +750,6 @@ export function buildGitHubManagedBlock(jiraKey, jiraUrl) {
   return [
     GITHUB_MARKER_START,
     `Jira Epic: [${jiraKey}](${jiraUrl})`,
-    GITHUB_MARKER_END,
   ].join('\n');
 }
 

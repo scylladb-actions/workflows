@@ -233,6 +233,17 @@ test('parseJiraKeyFromGitHubDescription reads managed link, plain URL, and plain
   );
 });
 
+test('parseJiraKeyFromGitHubDescription still reads legacy managed blocks with an end marker', () => {
+  assert.equal(
+    parseJiraKeyFromGitHubDescription([
+      '<!-- jira-milestone-sync:start -->',
+      'Jira Epic: [DRIVER-77](https://jira.example/browse/DRIVER-77)',
+      '<!-- jira-milestone-sync:end -->',
+    ].join('\n')),
+    'DRIVER-77',
+  );
+});
+
 test('quarterLabelFromDate derives Jira Delivery Quarter from due date', () => {
   assert.equal(quarterLabelFromDate('2026-01-01'), '2026 Q1');
   assert.equal(quarterLabelFromDate('2026-04-09'), '2026 Q2');
@@ -278,6 +289,24 @@ test('mergeGitHubDescription replaces an existing managed block', () => {
   assert.equal(stripGitHubManagedBlock(merged), 'Milestone body');
   assert.match(merged, /DRIVER-2/);
   assert.doesNotMatch(merged, /DRIVER-1/);
+  assert.doesNotMatch(merged, /jira-milestone-sync:end/);
+});
+
+test('mergeGitHubDescription replaces a legacy managed block with a block that has no end marker', () => {
+  const existing = [
+    'Milestone body',
+    '',
+    '<!-- jira-milestone-sync:start -->',
+    'Jira Epic: [DRIVER-1](https://jira.example/browse/DRIVER-1)',
+    '<!-- jira-milestone-sync:end -->',
+  ].join('\n');
+
+  const merged = mergeGitHubDescription(existing, 'DRIVER-2', 'https://jira.example/browse/DRIVER-2');
+
+  assert.equal(stripGitHubManagedBlock(merged), 'Milestone body');
+  assert.match(merged, /DRIVER-2/);
+  assert.doesNotMatch(merged, /DRIVER-1/);
+  assert.doesNotMatch(merged, /jira-milestone-sync:end/);
 });
 
 test('buildJiraManagedNodes renders milestone issues as bullet list items', () => {
