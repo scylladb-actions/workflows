@@ -295,6 +295,16 @@ function milestoneSelectorFromEvent(value) {
   return null;
 }
 
+function shouldIgnoreMilestoneEventValue(value) {
+  return Boolean(
+    value
+    && typeof value === 'object'
+    && !Array.isArray(value)
+    && Object.prototype.hasOwnProperty.call(value, 'due_on')
+    && !isoDateFromTimestamp(value.due_on),
+  );
+}
+
 function uniqueMilestoneSelectors(values) {
   const result = [];
   for (const value of values) {
@@ -314,7 +324,9 @@ export function resolveMilestoneSelectorsFromGitHubEvent(eventName, eventPayload
 
   if (normalizedEventName === 'milestone') {
     return uniqueMilestoneSelectors([
-      milestoneSelectorFromEvent(eventPayload?.milestone),
+      shouldIgnoreMilestoneEventValue(eventPayload?.milestone)
+        ? null
+        : milestoneSelectorFromEvent(eventPayload?.milestone),
     ]);
   }
 
@@ -323,8 +335,12 @@ export function resolveMilestoneSelectorsFromGitHubEvent(eventName, eventPayload
   }
 
   const action = String(eventPayload?.action ?? '').trim();
-  const currentMilestone = milestoneSelectorFromEvent(eventPayload?.issue?.milestone);
-  const previousMilestone = milestoneSelectorFromEvent(eventPayload?.changes?.milestone?.from);
+  const currentMilestone = shouldIgnoreMilestoneEventValue(eventPayload?.issue?.milestone)
+    ? null
+    : milestoneSelectorFromEvent(eventPayload?.issue?.milestone);
+  const previousMilestone = shouldIgnoreMilestoneEventValue(eventPayload?.changes?.milestone?.from)
+    ? null
+    : milestoneSelectorFromEvent(eventPayload?.changes?.milestone?.from);
 
   if (['opened', 'closed', 'reopened', 'milestoned'].includes(action)) {
     return uniqueMilestoneSelectors([currentMilestone]);
@@ -928,6 +944,10 @@ function isoDateFromTimestamp(timestamp) {
   return date.toISOString().slice(0, 10);
 }
 
+export function hasMilestoneDueDate(milestone) {
+  return Boolean(isoDateFromTimestamp(milestone?.due_on));
+}
+
 export function quarterLabelFromDate(dateText) {
   if (!dateText) {
     return null;
@@ -1264,6 +1284,19 @@ function buildGitHubOnlyDryRunResult(config, milestone, issues) {
   };
 }
 
+function buildSkippedMilestoneResult(milestone, reason, dryRun = false) {
+  return {
+    jiraKey: null,
+    milestoneNumber: milestone.number,
+    milestoneTitle: milestone.title,
+    issueCount: 0,
+    action: 'skipped',
+    dryRun,
+    plannedActions: [],
+    skippedReason: reason,
+  };
+}
+
 async function syncMilestone(config, milestoneSelector) {
   const githubToken = getGitHubToken();
   const githubRepo = getGitHubRepo();
@@ -1276,6 +1309,11 @@ async function syncMilestone(config, milestoneSelector) {
     githubRepo.repo,
     milestoneSelector,
   );
+
+  if (!hasMilestoneDueDate(milestone)) {
+    return buildSkippedMilestoneResult(milestone, 'milestone has no due date', dryRun);
+  }
+
   const milestoneIssues = await listMilestoneIssues(
     githubToken,
     githubRepo.owner,
@@ -1418,6 +1456,9 @@ async function showConfig(configPath) {
 }
 
 export function formatSyncResultLine(result) {
+  if (result.skippedReason) {
+    return `skipped milestone #${result.milestoneNumber} (${result.milestoneTitle}): ${result.skippedReason}.`;
+  }
   const prefix = result.dryRun ? 'dry-run: ' : '';
   const jiraTarget = result.jiraKey
     ? `Jira ${result.jiraKey}`
