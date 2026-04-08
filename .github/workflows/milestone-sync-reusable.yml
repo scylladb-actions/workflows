@@ -5,7 +5,8 @@ on:
     inputs:
       milestone:
         description: GitHub milestone number or exact title
-        required: true
+        required: false
+        default: ""
         type: string
       config-path:
         description: Path to the milestone-sync config file in the caller repository
@@ -18,9 +19,19 @@ on:
         default: "20"
         type: string
       tool-ref:
-        description: Ref of dkropachev/jira to checkout for the reusable workflow support files
+        description: Ref of scylladb-actions/workflows to checkout for the reusable workflow support files
         required: false
         default: main
+        type: string
+      github-event-name:
+        description: Original caller GitHub event name for automatic sync
+        required: false
+        default: ""
+        type: string
+      github-event-payload:
+        description: Original caller GitHub event payload serialized with toJson(github.event)
+        required: false
+        default: ""
         type: string
     secrets:
       USER_AND_KEY_FOR_JIRA_AUTOMATION:
@@ -44,7 +55,7 @@ jobs:
       - name: Checkout workflow repository
         uses: actions/checkout@v5
         with:
-          repository: dkropachev/jira
+          repository: scylladb-actions/workflows
           ref: ${{ inputs.tool-ref }}
           path: workflow-repo
 
@@ -75,7 +86,26 @@ jobs:
           GITHUB_TOKEN: ${{ github.token }}
           GITHUB_REPOSITORY: ${{ github.repository }}
           USER_AND_KEY_FOR_JIRA_AUTOMATION: ${{ secrets.USER_AND_KEY_FOR_JIRA_AUTOMATION }}
+          INPUT_MILESTONE: ${{ inputs.milestone }}
+          CALLER_GITHUB_EVENT_NAME: ${{ inputs.github-event-name }}
+          CALLER_GITHUB_EVENT_PAYLOAD: ${{ inputs.github-event-payload }}
         run: |
+          if [ -n "$CALLER_GITHUB_EVENT_NAME" ] && [ -n "$CALLER_GITHUB_EVENT_PAYLOAD" ]; then
+            event_path="$RUNNER_TEMP/github-event.json"
+            printf '%s' "$CALLER_GITHUB_EVENT_PAYLOAD" > "$event_path"
+
+            node milestone-sync.js sync-event \
+              --config "${{ github.workspace }}/caller-repo/${{ inputs.config-path }}" \
+              --event-name "$CALLER_GITHUB_EVENT_NAME" \
+              --event-path "$event_path"
+            exit 0
+          fi
+
+          if [ -z "$INPUT_MILESTONE" ]; then
+            echo "Provide either 'milestone' or both 'github-event-name' and 'github-event-payload'." >&2
+            exit 1
+          fi
+
           node milestone-sync.js sync \
             --config "${{ github.workspace }}/caller-repo/${{ inputs.config-path }}" \
-            --milestone "${{ inputs.milestone }}"
+            --milestone "$INPUT_MILESTONE"

@@ -5,7 +5,8 @@
   "type": "module",
   "scripts": {
     "sync": "node milestone-sync.js",
-    "test": "node --test milestone-sync.test.js"
+    "test": "node --test milestone-sync.test.js",
+    "test:github-live": "env MILESTONE_SYNC_INTERNAL_RUN_LIVE_GITHUB_TESTS=1 node --test milestone-sync.github-live.test.js"
   },
   "dependencies": {
     "yaml": "^2.8.1"

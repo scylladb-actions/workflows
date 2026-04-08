@@ -4,7 +4,7 @@ This repository hosts a reusable GitHub Actions workflow that syncs a GitHub mil
 
 The reusable workflow is published at:
 
-`dkropachev/jira/.github/workflows/milestone-sync-reusable.yml@main`
+`scylladb-actions/workflows/.github/workflows/milestone-sync-reusable.yml@main`
 
 The implementation files are colocated under `.github/workflows` so the reusable workflow can check out this repository and run the sync tool directly from there.
 
@@ -17,16 +17,20 @@ The implementation files are colocated under `.github/workflows` so the reusable
 
 ## Inputs
 
-- `milestone`: Required. GitHub milestone number or exact title.
+- `milestone`: Optional. GitHub milestone number or exact title for manual sync.
 - `config-path`: Optional. Path to the config file in the caller repository. Default: `milestone-sync/config.yaml`.
 - `node-version`: Optional. Node.js version used by the workflow. Default: `20`.
-- `tool-ref`: Optional. Ref of `dkropachev/jira` to check out for the reusable workflow support files. Default: `main`.
+- `tool-ref`: Optional. Ref of `scylladb-actions/workflows` to check out for the reusable workflow support files. Default: `main`.
+- `github-event-name`: Optional. Original caller event name for automatic sync.
+- `github-event-payload`: Optional. Original caller event payload, typically passed as `${{ toJson(github.event) }}`.
 
 ## Required secret
 
 - `USER_AND_KEY_FOR_JIRA_AUTOMATION`: Jira credentials in `user:token` format.
 
 ## Caller workflow example
+
+Manual:
 
 ```yaml
 name: Sync Milestone
@@ -41,10 +45,32 @@ on:
 
 jobs:
   sync:
-    uses: dkropachev/jira/.github/workflows/milestone-sync-reusable.yml@main
+    uses: scylladb-actions/workflows/.github/workflows/milestone-sync-reusable.yml@main
     with:
       milestone: ${{ inputs.milestone }}
       config-path: milestone-sync/config.yaml
+    secrets:
+      USER_AND_KEY_FOR_JIRA_AUTOMATION: ${{ secrets.USER_AND_KEY_FOR_JIRA_AUTOMATION }}
+```
+
+Automatic:
+
+```yaml
+name: Auto Sync Milestone
+
+on:
+  milestone:
+    types: [created, edited, opened, closed]
+  issues:
+    types: [opened, closed, reopened, milestoned, demilestoned]
+
+jobs:
+  sync:
+    uses: scylladb-actions/workflows/.github/workflows/milestone-sync-reusable.yml@main
+    with:
+      config-path: milestone-sync/config.yaml
+      github-event-name: ${{ github.event_name }}
+      github-event-payload: ${{ toJson(github.event) }}
     secrets:
       USER_AND_KEY_FOR_JIRA_AUTOMATION: ${{ secrets.USER_AND_KEY_FOR_JIRA_AUTOMATION }}
 ```

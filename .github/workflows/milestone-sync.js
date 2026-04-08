@@ -15,6 +15,7 @@ function usage() {
   return [
     'Usage:',
     '  node milestone-sync.js sync --milestone <number|title> [--config path]',
+    '  node milestone-sync.js sync-event [--config path] [--event-name name] [--event-path path]',
     '  node milestone-sync.js show-config [--config path]',
     '',
     'Auth:',
@@ -25,7 +26,14 @@ function usage() {
 }
 
 function parseArgs(argv) {
-  const args = { command: null, config: 'config.yaml', milestone: null };
+  const args = {
+    command: null,
+    config: 'config.yaml',
+    milestone: null,
+    eventName: null,
+    eventPath: null,
+    dryRun: false,
+  };
   const rest = [...argv];
 
   args.command = rest.shift() ?? null;
@@ -35,6 +43,12 @@ function parseArgs(argv) {
       args.config = rest.shift();
     } else if (current === '--milestone') {
       args.milestone = rest.shift();
+    } else if (current === '--event-name') {
+      args.eventName = rest.shift();
+    } else if (current === '--event-path') {
+      args.eventPath = rest.shift();
+    } else if (current === '--dry-run') {
+      args.dryRun = true;
     } else {
       throw new Error(`Unknown argument: ${current}`);
     }
@@ -46,7 +60,7 @@ function parseArgs(argv) {
   if (args.command === 'sync' && !args.milestone) {
     throw new Error('Missing --milestone');
   }
-  if (!['sync', 'show-config'].includes(args.command)) {
+  if (!['sync', 'sync-event', 'show-config'].includes(args.command)) {
     throw new Error(`Unsupported command: ${args.command}`);
   }
   return args;
@@ -214,6 +228,125 @@ export function getGitHubRepoFromEnv(env = process.env) {
     throw new Error('Missing GitHub repository. Set GITHUB_REPOSITORY=owner/repo.');
   }
   return parseGitHubRepo(value, 'GITHUB_REPOSITORY');
+}
+
+export function isDryRunEnabled(env = process.env, cliFlag = false) {
+  if (cliFlag) {
+    return true;
+  }
+
+  const value = env.MILESTONE_SYNC_INTERNAL_DRY_RUN;
+  if (!value) {
+    return false;
+  }
+  return ['1', 'true', 'yes', 'on'].includes(String(value).trim().toLowerCase());
+}
+
+export function isGitHubOnlyDryRunEnabled(env = process.env) {
+  const value = env.MILESTONE_SYNC_INTERNAL_GITHUB_ONLY_DRY_RUN;
+  if (!value) {
+    return false;
+  }
+  return ['1', 'true', 'yes', 'on'].includes(String(value).trim().toLowerCase());
+}
+
+function getGitHubEventName(env = process.env, override = null) {
+  const value = override ?? env.GITHUB_EVENT_NAME;
+  if (!value) {
+    throw new Error('Missing GitHub event name. Set GITHUB_EVENT_NAME or pass --event-name.');
+  }
+  return String(value).trim();
+}
+
+function getGitHubEventPath(env = process.env, override = null) {
+  const value = override ?? env.GITHUB_EVENT_PATH;
+  if (!value) {
+    throw new Error('Missing GitHub event path. Set GITHUB_EVENT_PATH or pass --event-path.');
+  }
+  return String(value).trim();
+}
+
+function milestoneSelectorFromEvent(value) {
+  if (value == null) {
+    return null;
+  }
+  if (typeof value === 'number') {
+    return String(value);
+  }
+  if (typeof value === 'string') {
+    return value.trim() || null;
+  }
+  if (typeof value === 'object' && !Array.isArray(value)) {
+    if (value.number != null) {
+      return String(value.number);
+    }
+    if (typeof value.title === 'string' && value.title.trim() !== '') {
+      return value.title.trim();
+    }
+  }
+  return null;
+}
+
+function uniqueMilestoneSelectors(values) {
+  const result = [];
+  for (const value of values) {
+    if (!value || result.includes(value)) {
+      continue;
+    }
+    result.push(value);
+  }
+  return result;
+}
+
+export function resolveMilestoneSelectorsFromGitHubEvent(eventName, eventPayload) {
+  const normalizedEventName = String(eventName ?? '').trim();
+  if (!normalizedEventName) {
+    throw new Error('Missing GitHub event name.');
+  }
+
+  if (normalizedEventName === 'milestone') {
+    return uniqueMilestoneSelectors([
+      milestoneSelectorFromEvent(eventPayload?.milestone),
+    ]);
+  }
+
+  if (normalizedEventName !== 'issues') {
+    return [];
+  }
+
+  const action = String(eventPayload?.action ?? '').trim();
+  const currentMilestone = milestoneSelectorFromEvent(eventPayload?.issue?.milestone);
+  const previousMilestone = milestoneSelectorFromEvent(eventPayload?.changes?.milestone?.from);
+
+  if (['opened', 'closed', 'reopened', 'milestoned'].includes(action)) {
+    return uniqueMilestoneSelectors([currentMilestone]);
+  }
+  if (action === 'demilestoned') {
+    return uniqueMilestoneSelectors([previousMilestone]);
+  }
+  if (action === 'edited' && previousMilestone) {
+    return uniqueMilestoneSelectors([previousMilestone, currentMilestone]);
+  }
+
+  return [];
+}
+
+async function readGitHubEventPayload(eventPath) {
+  let text;
+  try {
+    text = await fsPromises.readFile(eventPath, 'utf8');
+  } catch (error) {
+    if (error?.code === 'ENOENT') {
+      throw new Error(`GitHub event payload not found: ${path.resolve(eventPath)}`);
+    }
+    throw error;
+  }
+
+  try {
+    return JSON.parse(text);
+  } catch (error) {
+    throw new Error(`GitHub event payload is not valid JSON: ${error.message}`);
+  }
 }
 
 function getJiraAuth() {
@@ -907,20 +1040,28 @@ async function resolveSprintForDueDate(jira, projectKey, dueDate) {
   return null;
 }
 
-async function ensureSprintAssignment(jira, issueKey, sprint) {
+async function shouldAssignSprint(jira, issueKey, sprint) {
   if (!sprint) {
-    return;
+    return false;
   }
 
   const sprintField = await jira.findField('Sprint', { includeBuiltin: false });
   if (!sprintField) {
     console.warn('Warning: Jira field "Sprint" was not found, skipping sprint assignment');
-    return;
+    return false;
   }
 
   const issue = await jira.getIssue(issueKey, [sprintField.id]);
   const currentSprints = issue.fields?.[sprintField.id];
   if (Array.isArray(currentSprints) && currentSprints.some((item) => String(item.id) === String(sprint.id))) {
+    return false;
+  }
+
+  return true;
+}
+
+async function ensureSprintAssignment(jira, issueKey, sprint) {
+  if (!await shouldAssignSprint(jira, issueKey, sprint)) {
     return;
   }
 
@@ -1063,6 +1204,16 @@ async function ensureJiraRemoteLink(jira, issueKey, milestone, githubRepo) {
   await jira.addRemoteLink(issueKey, milestone.html_url, title);
 }
 
+async function hasJiraRemoteLink(jira, issueKey, milestoneUrl) {
+  const remoteLinks = await jira.getRemoteLinks(issueKey);
+  return remoteLinks.some((item) => item?.object?.url === milestoneUrl);
+}
+
+function shouldUpdateGitHubMilestoneLink(milestone, jiraKey, jiraBaseUrl) {
+  const nextDescription = mergeGitHubDescription(milestone.description ?? '', jiraKey, `${jiraBaseUrl}/browse/${jiraKey}`);
+  return (milestone.description ?? '') !== nextDescription;
+}
+
 async function ensureGitHubMilestoneLink(token, githubRepo, milestone, jiraKey, jiraBaseUrl) {
   const nextDescription = mergeGitHubDescription(milestone.description ?? '', jiraKey, `${jiraBaseUrl}/browse/${jiraKey}`);
   if ((milestone.description ?? '') === nextDescription) {
@@ -1080,11 +1231,36 @@ async function ensureGitHubMilestoneLink(token, githubRepo, milestone, jiraKey, 
   );
 }
 
+function buildGitHubOnlyDryRunResult(config, milestone, issues) {
+  const expectedSummary = buildExpectedSummary(config, milestone.title);
+  const hasManagedLink = Boolean(extractGitHubManagedBlock(milestone.description ?? ''));
+  const plannedActions = [
+    `prepare Jira ${config.jira.issueType} summary "${expectedSummary}"`,
+    `create-or-update Jira ${config.jira.issueType} in project ${config.jira.project}`,
+    'skip Jira-specific lookups and field resolution in GitHub-only dry-run',
+  ];
+
+  if (!hasManagedLink) {
+    plannedActions.push('update GitHub milestone description with Jira link');
+  }
+
+  return {
+    jiraKey: null,
+    milestoneNumber: milestone.number,
+    milestoneTitle: milestone.title,
+    issueCount: issues.length,
+    action: 'would create-or-update',
+    dryRun: true,
+    plannedActions,
+    githubOnlyDryRun: true,
+  };
+}
+
 async function syncMilestone(config, milestoneSelector) {
   const githubToken = getGitHubToken();
   const githubRepo = getGitHubRepo();
-  const jiraAuth = getJiraAuth();
-  const jira = new JiraClient(config.jira.url, jiraAuth.user, jiraAuth.token);
+  const dryRun = isDryRunEnabled();
+  const githubOnlyDryRun = dryRun && isGitHubOnlyDryRunEnabled();
 
   const milestone = await resolveMilestone(
     githubToken,
@@ -1105,6 +1281,12 @@ async function syncMilestone(config, milestoneSelector) {
     milestoneIssues,
   );
 
+  if (githubOnlyDryRun) {
+    return buildGitHubOnlyDryRunResult(config, milestone, issues);
+  }
+
+  const jiraAuth = getJiraAuth();
+  const jira = new JiraClient(config.jira.url, jiraAuth.user, jiraAuth.token);
   const expectedSummary = buildExpectedSummary(config, milestone.title);
   const scyllaFieldMeta = await ensureScyllaComponentsOption(config, jira);
   const milestoneDueDate = isoDateFromTimestamp(milestone.due_on);
@@ -1119,28 +1301,86 @@ async function syncMilestone(config, milestoneSelector) {
     scyllaFieldMeta,
   );
 
-  let jiraKey;
+  let jiraKey = null;
+  let action;
+  const plannedActions = [];
   if (existingEpic) {
     jiraKey = existingEpic.key;
     const updateFields = { ...jiraFields };
     delete updateFields.project;
     delete updateFields.issuetype;
-    await jira.updateIssue(jiraKey, updateFields);
+    if (dryRun) {
+      action = 'would update';
+      plannedActions.push(`update Jira issue ${jiraKey}`);
+    } else {
+      await jira.updateIssue(jiraKey, updateFields);
+      action = 'updated';
+    }
   } else {
-    const created = await jira.createIssue(jiraFields);
-    jiraKey = created.key;
+    if (dryRun) {
+      action = 'would create';
+      plannedActions.push(`create Jira ${config.jira.issueType} in project ${config.jira.project}`);
+    } else {
+      const created = await jira.createIssue(jiraFields);
+      jiraKey = created.key;
+      action = 'created';
+    }
   }
 
-  await ensureSprintAssignment(jira, jiraKey, sprint);
-  await ensureJiraRemoteLink(jira, jiraKey, milestone, githubRepo);
-  await ensureGitHubMilestoneLink(githubToken, githubRepo, milestone, jiraKey, config.jira.url);
+  if (dryRun) {
+    if (sprint && (!existingEpic || await shouldAssignSprint(jira, jiraKey, sprint))) {
+      plannedActions.push(`assign Jira issue to sprint ${sprint.name ?? sprint.id}`);
+    }
+    if (!existingEpic || !await hasJiraRemoteLink(jira, jiraKey, milestone.html_url)) {
+      plannedActions.push(`add Jira remote link to ${milestone.html_url}`);
+    }
+    if (existingEpic) {
+      if (shouldUpdateGitHubMilestoneLink(milestone, jiraKey, config.jira.url)) {
+        plannedActions.push(`update GitHub milestone description with Jira link ${jiraKey}`);
+      }
+    } else {
+      plannedActions.push('update GitHub milestone description with the created Jira link');
+    }
+  } else {
+    await ensureSprintAssignment(jira, jiraKey, sprint);
+    await ensureJiraRemoteLink(jira, jiraKey, milestone, githubRepo);
+    await ensureGitHubMilestoneLink(githubToken, githubRepo, milestone, jiraKey, config.jira.url);
+  }
 
   return {
     jiraKey,
     milestoneNumber: milestone.number,
     milestoneTitle: milestone.title,
     issueCount: issues.length,
-    action: existingEpic ? 'updated' : 'created',
+    action,
+    dryRun,
+    plannedActions,
+  };
+}
+
+async function syncMilestonesFromGitHubEvent(config, options = {}) {
+  const eventName = getGitHubEventName(process.env, options.eventName);
+  const eventPath = getGitHubEventPath(process.env, options.eventPath);
+  const eventPayload = await readGitHubEventPayload(eventPath);
+  const selectors = resolveMilestoneSelectorsFromGitHubEvent(eventName, eventPayload);
+
+  if (selectors.length === 0) {
+    return {
+      eventName,
+      action: String(eventPayload?.action ?? '').trim() || null,
+      results: [],
+    };
+  }
+
+  const results = [];
+  for (const selector of selectors) {
+    results.push(await syncMilestone(config, selector));
+  }
+
+  return {
+    eventName,
+    action: String(eventPayload?.action ?? '').trim() || null,
+    results,
   };
 }
 
@@ -1169,9 +1409,20 @@ async function showConfig(configPath) {
   }, null, 2));
 }
 
+export function formatSyncResultLine(result) {
+  const prefix = result.dryRun ? 'dry-run: ' : '';
+  const jiraTarget = result.jiraKey
+    ? `Jira ${result.jiraKey}`
+    : `Jira ${result.dryRun ? 'issue' : 'unknown issue'}`;
+  return `${prefix}${result.action} ${jiraTarget} from milestone #${result.milestoneNumber} (${result.milestoneTitle}); synced ${result.issueCount} issues.`;
+}
+
 async function main() {
   try {
     const args = parseArgs(process.argv.slice(2));
+    if (args.dryRun) {
+      process.env.MILESTONE_SYNC_INTERNAL_DRY_RUN = '1';
+    }
     const config = await readConfig(args.config);
 
     if (args.command === 'show-config') {
@@ -1179,8 +1430,34 @@ async function main() {
       return;
     }
 
+    if (args.command === 'sync-event') {
+      const eventResult = await syncMilestonesFromGitHubEvent(config, {
+        eventName: args.eventName,
+        eventPath: args.eventPath,
+      });
+      if (eventResult.results.length === 0) {
+        const actionSuffix = eventResult.action ? `/${eventResult.action}` : '';
+        console.log(`No milestone sync needed for GitHub event ${eventResult.eventName}${actionSuffix}.`);
+        return;
+      }
+      for (const result of eventResult.results) {
+        console.log(formatSyncResultLine(result));
+        if (result.dryRun) {
+          for (const plannedAction of result.plannedActions) {
+            console.log(`  - ${plannedAction}`);
+          }
+        }
+      }
+      return;
+    }
+
     const result = await syncMilestone(config, args.milestone);
-    console.log(`${result.action} Jira ${result.jiraKey} from milestone #${result.milestoneNumber} (${result.milestoneTitle}); synced ${result.issueCount} issues.`);
+    console.log(formatSyncResultLine(result));
+    if (result.dryRun) {
+      for (const plannedAction of result.plannedActions) {
+        console.log(`  - ${plannedAction}`);
+      }
+    }
   } catch (error) {
     console.error(error.message);
     console.error('');

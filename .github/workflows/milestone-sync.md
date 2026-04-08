@@ -8,9 +8,11 @@ The workflow YAML, script, package manifest, and example config are colocated in
 
 The reusable workflow lives at:
 
-`dkropachev/jira/.github/workflows/milestone-sync-reusable.yml@main`
+`scylladb-actions/workflows/.github/workflows/milestone-sync-reusable.yml@main`
 
 Caller example:
+
+Manual:
 
 ```yaml
 name: Sync Milestone
@@ -24,10 +26,32 @@ on:
 
 jobs:
   sync:
-    uses: dkropachev/jira/.github/workflows/milestone-sync-reusable.yml@main
+    uses: scylladb-actions/workflows/.github/workflows/milestone-sync-reusable.yml@main
     with:
       milestone: ${{ inputs.milestone }}
       config-path: milestone-sync/config.yaml
+    secrets:
+      USER_AND_KEY_FOR_JIRA_AUTOMATION: ${{ secrets.USER_AND_KEY_FOR_JIRA_AUTOMATION }}
+```
+
+Automatic:
+
+```yaml
+name: Auto Sync Milestone
+
+on:
+  milestone:
+    types: [created, edited, opened, closed]
+  issues:
+    types: [opened, closed, reopened, milestoned, demilestoned]
+
+jobs:
+  sync:
+    uses: scylladb-actions/workflows/.github/workflows/milestone-sync-reusable.yml@main
+    with:
+      config-path: milestone-sync/config.yaml
+      github-event-name: ${{ github.event_name }}
+      github-event-payload: ${{ toJson(github.event) }}
     secrets:
       USER_AND_KEY_FOR_JIRA_AUTOMATION: ${{ secrets.USER_AND_KEY_FOR_JIRA_AUTOMATION }}
 ```

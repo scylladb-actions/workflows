@@ -7,14 +7,18 @@ import {
   classifyIssueStatus,
   findSprintForDate,
   findNearestGitRoot,
+  formatSyncResultLine,
   getGitHubRepo,
   getGitHubRepoFromEnv,
+  isDryRunEnabled,
+  isGitHubOnlyDryRunEnabled,
   mergeGitHubDescription,
   mergeJiraDescription,
   normalizeConfig,
   parseJiraKeyFromGitHubDescription,
   parseGitHubRepoFromRemoteUrl,
   quarterLabelFromDate,
+  resolveMilestoneSelectorsFromGitHubEvent,
   shouldPopulateConfiguredAssignee,
   stripGitHubManagedBlock,
 } from './milestone-sync.js';
@@ -97,14 +101,120 @@ test('getGitHubRepo falls back to nearest git origin remote', () => {
     getGitHubRepo({}, {
       cwd: '/workspace/project/tools/milestone-sync',
       existsSync,
-      execGit: () => 'git@github.com:dkropachev/jira.git',
+      execGit: () => 'git@github.com:scylladb-actions/workflows.git',
     }),
     {
       source: 'git',
       root: '/workspace/project',
-      owner: 'dkropachev',
-      repo: 'jira',
+      owner: 'scylladb-actions',
+      repo: 'workflows',
     },
+  );
+});
+
+test('isDryRunEnabled only turns on for the hidden internal switch', () => {
+  assert.equal(isDryRunEnabled({}), false);
+  assert.equal(isDryRunEnabled({ MILESTONE_SYNC_INTERNAL_DRY_RUN: '1' }), true);
+  assert.equal(isDryRunEnabled({ MILESTONE_SYNC_INTERNAL_DRY_RUN: 'true' }), true);
+  assert.equal(isDryRunEnabled({}, true), true);
+});
+
+test('isGitHubOnlyDryRunEnabled only turns on for the hidden internal switch', () => {
+  assert.equal(isGitHubOnlyDryRunEnabled({}), false);
+  assert.equal(isGitHubOnlyDryRunEnabled({ MILESTONE_SYNC_INTERNAL_GITHUB_ONLY_DRY_RUN: '1' }), true);
+  assert.equal(isGitHubOnlyDryRunEnabled({ MILESTONE_SYNC_INTERNAL_GITHUB_ONLY_DRY_RUN: 'true' }), true);
+});
+
+test('formatSyncResultLine renders dry-run output without a Jira key for creates', () => {
+  assert.equal(
+    formatSyncResultLine({
+      dryRun: true,
+      action: 'would create',
+      jiraKey: null,
+      milestoneNumber: 12,
+      milestoneTitle: 'Release 12',
+      issueCount: 7,
+    }),
+    'dry-run: would create Jira issue from milestone #12 (Release 12); synced 7 issues.',
+  );
+});
+
+test('formatSyncResultLine renders dry-run output for github-only create-or-update', () => {
+  assert.equal(
+    formatSyncResultLine({
+      dryRun: true,
+      action: 'would create-or-update',
+      jiraKey: null,
+      milestoneNumber: 13,
+      milestoneTitle: 'Release 13',
+      issueCount: 4,
+    }),
+    'dry-run: would create-or-update Jira issue from milestone #13 (Release 13); synced 4 issues.',
+  );
+});
+
+test('resolveMilestoneSelectorsFromGitHubEvent returns the milestone for milestone events', () => {
+  assert.deepEqual(
+    resolveMilestoneSelectorsFromGitHubEvent('milestone', {
+      action: 'edited',
+      milestone: { number: 17, title: 'Release 17' },
+    }),
+    ['17'],
+  );
+});
+
+test('resolveMilestoneSelectorsFromGitHubEvent returns the current milestone for issues lifecycle events', () => {
+  assert.deepEqual(
+    resolveMilestoneSelectorsFromGitHubEvent('issues', {
+      action: 'closed',
+      issue: { milestone: { number: 18 } },
+    }),
+    ['18'],
+  );
+  assert.deepEqual(
+    resolveMilestoneSelectorsFromGitHubEvent('issues', {
+      action: 'milestoned',
+      issue: { milestone: { number: 19 } },
+    }),
+    ['19'],
+  );
+});
+
+test('resolveMilestoneSelectorsFromGitHubEvent returns the previous milestone when an issue is removed', () => {
+  assert.deepEqual(
+    resolveMilestoneSelectorsFromGitHubEvent('issues', {
+      action: 'demilestoned',
+      changes: { milestone: { from: { number: 20 } } },
+      issue: { milestone: null },
+    }),
+    ['20'],
+  );
+});
+
+test('resolveMilestoneSelectorsFromGitHubEvent returns both milestones when an issue changes milestones in one edit', () => {
+  assert.deepEqual(
+    resolveMilestoneSelectorsFromGitHubEvent('issues', {
+      action: 'edited',
+      changes: { milestone: { from: { number: 21 } } },
+      issue: { milestone: { number: 22 } },
+    }),
+    ['21', '22'],
+  );
+});
+
+test('resolveMilestoneSelectorsFromGitHubEvent returns an empty list for unrelated events', () => {
+  assert.deepEqual(
+    resolveMilestoneSelectorsFromGitHubEvent('issues', {
+      action: 'assigned',
+      issue: { milestone: { number: 23 } },
+    }),
+    [],
+  );
+  assert.deepEqual(
+    resolveMilestoneSelectorsFromGitHubEvent('pull_request', {
+      action: 'closed',
+    }),
+    [],
   );
 });
 
