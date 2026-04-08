@@ -10,6 +10,7 @@ import {
   formatSyncResultLine,
   getGitHubRepo,
   getGitHubRepoFromEnv,
+  hasMilestoneDueDate,
   isDryRunEnabled,
   isGitHubOnlyDryRunEnabled,
   mergeGitHubDescription,
@@ -153,6 +154,19 @@ test('formatSyncResultLine renders dry-run output for github-only create-or-upda
   );
 });
 
+test('formatSyncResultLine renders skipped output for milestones without a due date', () => {
+  assert.equal(
+    formatSyncResultLine({
+      action: 'skipped',
+      milestoneNumber: 30,
+      milestoneTitle: '2.0.0',
+      issueCount: 0,
+      skippedReason: 'milestone has no due date',
+    }),
+    'skipped milestone #30 (2.0.0): milestone has no due date.',
+  );
+});
+
 test('resolveMilestoneSelectorsFromGitHubEvent returns the milestone for milestone events', () => {
   assert.deepEqual(
     resolveMilestoneSelectorsFromGitHubEvent('milestone', {
@@ -160,6 +174,23 @@ test('resolveMilestoneSelectorsFromGitHubEvent returns the milestone for milesto
       milestone: { number: 17, title: 'Release 17' },
     }),
     ['17'],
+  );
+});
+
+test('resolveMilestoneSelectorsFromGitHubEvent ignores milestones without a due date', () => {
+  assert.deepEqual(
+    resolveMilestoneSelectorsFromGitHubEvent('milestone', {
+      action: 'edited',
+      milestone: { number: 17, title: 'Release 17', due_on: null },
+    }),
+    [],
+  );
+  assert.deepEqual(
+    resolveMilestoneSelectorsFromGitHubEvent('issues', {
+      action: 'milestoned',
+      issue: { milestone: { number: 19, due_on: null } },
+    }),
+    [],
   );
 });
 
@@ -248,6 +279,12 @@ test('quarterLabelFromDate derives Jira Delivery Quarter from due date', () => {
   assert.equal(quarterLabelFromDate('2026-01-01'), '2026 Q1');
   assert.equal(quarterLabelFromDate('2026-04-09'), '2026 Q2');
   assert.equal(quarterLabelFromDate('2026-12-31'), '2026 Q4');
+});
+
+test('hasMilestoneDueDate only returns true for milestones with a valid due date', () => {
+  assert.equal(hasMilestoneDueDate({ due_on: '2026-04-09T00:00:00Z' }), true);
+  assert.equal(hasMilestoneDueDate({ due_on: null }), false);
+  assert.equal(hasMilestoneDueDate({}), false);
 });
 
 test('findSprintForDate selects the sprint whose range contains the due date', () => {
