@@ -665,7 +665,7 @@ async function fetchAssociatedPullRequests(token, owner, repo, issueNumber) {
 }
 
 export function classifyIssueStatus(issue, associatedPullRequests = []) {
-  if (associatedPullRequests.some((pullRequest) => pullRequest.merged || pullRequest.mergedAt)) {
+  if (issue.state === 'closed') {
     return {
       key: 'done',
       label: 'Done',
@@ -680,15 +680,6 @@ export function classifyIssueStatus(issue, associatedPullRequests = []) {
       label: 'In-progress',
       color: 'blue',
       emoji: '🛠️',
-    };
-  }
-
-  if (issue.state === 'closed') {
-    return {
-      key: 'done',
-      label: 'Done',
-      color: 'green',
-      emoji: '✅',
     };
   }
 

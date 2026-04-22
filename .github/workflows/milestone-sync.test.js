@@ -301,7 +301,7 @@ test('classifyIssueStatus maps issues to planned, in-progress, and done', () => 
   assert.equal(classifyIssueStatus({ state: 'open' }, []).key, 'planned');
   assert.equal(classifyIssueStatus({ state: 'open' }, []).label, 'To be done');
   assert.equal(classifyIssueStatus({ state: 'open' }, [{ number: 1, merged: false }]).key, 'in_progress');
-  assert.equal(classifyIssueStatus({ state: 'open' }, [{ number: 2, merged: true }]).key, 'done');
+  assert.equal(classifyIssueStatus({ state: 'open' }, [{ number: 2, merged: true }]).key, 'in_progress');
   assert.equal(classifyIssueStatus({ state: 'closed' }, []).key, 'done');
 });
 
