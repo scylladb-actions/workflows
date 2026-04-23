@@ -4,7 +4,9 @@ This repository hosts a reusable GitHub Actions workflow that syncs a GitHub mil
 
 The reusable workflow is published at:
 
-`scylladb-actions/workflows/.github/workflows/milestone-sync-reusable.yml@main`
+`scylladb-actions/workflows/.github/workflows/milestone-sync-reusable.yml@<workflow-sha>`
+
+Pin callers to a commit SHA rather than a branch or tag.
 
 The implementation files are colocated under `.github/workflows` so the reusable workflow can check out this repository and run the sync tool directly from there.
 
@@ -20,7 +22,9 @@ The implementation files are colocated under `.github/workflows` so the reusable
 - `milestone`: Optional. GitHub milestone number or exact title for manual sync.
 - `config-path`: Optional. Path to the config file in the caller repository. Default: `milestone-sync/config.yaml`.
 - `node-version`: Optional. Node.js version used by the workflow. Default: `20`.
-- `tool-ref`: Optional. Ref of `scylladb-actions/workflows` to check out for the reusable workflow support files. Default: `main`.
+- `tool-ref`: Optional. Override ref for the reusable workflow support checkout. Default: the reusable workflow commit SHA on GitHub.com.
+
+If you run this on GitHub Enterprise Server, set `tool-ref` explicitly because GitHub documents `job.workflow_repository` and `job.workflow_sha` as unavailable there.
 - `github-event-name`: Optional. Original caller event name for automatic sync.
 - `github-event-payload`: Optional. Original caller event payload, typically passed as `${{ toJson(github.event) }}`.
 
@@ -45,7 +49,7 @@ on:
 
 jobs:
   sync:
-    uses: scylladb-actions/workflows/.github/workflows/milestone-sync-reusable.yml@main
+    uses: scylladb-actions/workflows/.github/workflows/milestone-sync-reusable.yml@<workflow-sha>
     with:
       milestone: ${{ inputs.milestone }}
       config-path: milestone-sync/config.yaml
@@ -66,7 +70,7 @@ on:
 
 jobs:
   sync:
-    uses: scylladb-actions/workflows/.github/workflows/milestone-sync-reusable.yml@main
+    uses: scylladb-actions/workflows/.github/workflows/milestone-sync-reusable.yml@<workflow-sha>
     with:
       config-path: milestone-sync/config.yaml
       github-event-name: ${{ github.event_name }}

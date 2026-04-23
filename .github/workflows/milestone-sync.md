@@ -8,7 +8,11 @@ The workflow YAML, script, package manifest, and example config are colocated in
 
 The reusable workflow lives at:
 
-`scylladb-actions/workflows/.github/workflows/milestone-sync-reusable.yml@main`
+`scylladb-actions/workflows/.github/workflows/milestone-sync-reusable.yml@<workflow-sha>`
+
+Callers should pin that reference to a commit SHA.
+
+On GitHub Enterprise Server, set `tool-ref` explicitly because GitHub documents `job.workflow_repository` and `job.workflow_sha` as unavailable there.
 
 Caller example:
 
@@ -26,7 +30,7 @@ on:
 
 jobs:
   sync:
-    uses: scylladb-actions/workflows/.github/workflows/milestone-sync-reusable.yml@main
+    uses: scylladb-actions/workflows/.github/workflows/milestone-sync-reusable.yml@<workflow-sha>
     with:
       milestone: ${{ inputs.milestone }}
       config-path: milestone-sync/config.yaml
@@ -47,7 +51,7 @@ on:
 
 jobs:
   sync:
-    uses: scylladb-actions/workflows/.github/workflows/milestone-sync-reusable.yml@main
+    uses: scylladb-actions/workflows/.github/workflows/milestone-sync-reusable.yml@<workflow-sha>
     with:
       config-path: milestone-sync/config.yaml
       github-event-name: ${{ github.event_name }}
