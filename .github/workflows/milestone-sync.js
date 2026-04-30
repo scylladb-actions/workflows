@@ -7,17 +7,10 @@ import path from 'node:path';
 import process from 'node:process';
 import { pathToFileURL } from 'node:url';
 
-const GITHUB_MARKER_START = '<!-- jira-milestone-sync:start -->';
-const GITHUB_MARKER_END = '<!-- jira-milestone-sync:end -->';
+const JIRA_KEY_PATTERN = '[A-Z][A-Z0-9_]+-\\d+';
+const LEGACY_GITHUB_MARKER_START = '<!-- jira-milestone-sync:start -->';
+const LEGACY_GITHUB_MARKER_END = '<!-- jira-milestone-sync:end -->';
 const JIRA_BASE_URL = 'https://scylladb.atlassian.net';
-
-function buildLegacyGitHubManagedBlockPattern() {
-  return new RegExp(`${escapeRegExp(GITHUB_MARKER_START)}([\\s\\S]*?)${escapeRegExp(GITHUB_MARKER_END)}`);
-}
-
-function buildGitHubManagedBlockToEndPattern(flags = '') {
-  return new RegExp(`${escapeRegExp(GITHUB_MARKER_START)}([\\s\\S]*)$`, flags);
-}
 
 function usage() {
   return [
@@ -711,24 +704,36 @@ async function enrichMilestoneIssues(token, owner, repo, issues) {
   }));
 }
 
-export function extractGitHubManagedBlock(text) {
-  if (!text) {
-    return null;
-  }
-  const match = text.match(buildLegacyGitHubManagedBlockPattern())
-    ?? text.match(buildGitHubManagedBlockToEndPattern());
-  return match ? match[1].trim() : null;
-}
-
-export function stripGitHubManagedBlock(text) {
+function normalizeGitHubDescription(text) {
   if (!text) {
     return '';
   }
   return text
-    .replace(new RegExp(`\\n?${escapeRegExp(GITHUB_MARKER_START)}[\\s\\S]*?${escapeRegExp(GITHUB_MARKER_END)}\\n?`, 'g'), '\n')
-    .replace(new RegExp(`\\n?${escapeRegExp(GITHUB_MARKER_START)}[\\s\\S]*$`, 'g'), '\n')
     .replace(/\n{3,}/g, '\n\n')
     .trim();
+}
+
+function stripLegacyGitHubManagedBlock(text) {
+  if (!text) {
+    return '';
+  }
+  return text
+    .replace(new RegExp(`\\n?${escapeRegExp(LEGACY_GITHUB_MARKER_START)}[\\s\\S]*?${escapeRegExp(LEGACY_GITHUB_MARKER_END)}\\n?`, 'g'), '\n')
+    .replace(new RegExp(`\\n?${escapeRegExp(LEGACY_GITHUB_MARKER_START)}[\\s\\S]*$`, 'g'), '\n');
+}
+
+function stripGitHubJiraEpicLines(text) {
+  if (!text) {
+    return '';
+  }
+  return text.replace(
+    new RegExp(`^\\s*Jira Epic:\\s*(?:\\[)?${JIRA_KEY_PATTERN}(?:\\])?(?:\\([^\\n)]*\\))?\\s*$\\n?`, 'gm'),
+    '',
+  );
+}
+
+export function stripGitHubManagedBlock(text) {
+  return normalizeGitHubDescription(stripGitHubJiraEpicLines(stripLegacyGitHubManagedBlock(text)));
 }
 
 export function parseJiraKeyFromGitHubDescription(text) {
@@ -736,28 +741,17 @@ export function parseJiraKeyFromGitHubDescription(text) {
     return null;
   }
 
-  const managed = extractGitHubManagedBlock(text);
-  if (managed) {
-    const managedMatch = managed.match(/Jira Epic:\s*(?:\[)?([A-Z][A-Z0-9_]+-\d+)(?:\])?(?:\(|\b)/);
-    if (managedMatch) {
-      return managedMatch[1];
-    }
-  }
-
-  const browseUrlMatch = text.match(/\/browse\/([A-Z][A-Z0-9_]+-\d+)\b/);
+  const browseUrlMatch = text.match(new RegExp(`/browse/(${JIRA_KEY_PATTERN})\\b`));
   if (browseUrlMatch) {
     return browseUrlMatch[1];
   }
 
-  const plainTextMatch = text.match(/\bJira Epic:\s*([A-Z][A-Z0-9_]+-\d+)\b/);
+  const plainTextMatch = text.match(new RegExp(`\\bJira Epic:\\s*(?:\\[)?(${JIRA_KEY_PATTERN})(?:\\])?(?:\\(|\\b)`));
   return plainTextMatch ? plainTextMatch[1] : null;
 }
 
 export function buildGitHubManagedBlock(jiraKey, jiraUrl) {
-  return [
-    GITHUB_MARKER_START,
-    `Jira Epic: [${jiraKey}](${jiraUrl})`,
-  ].join('\n');
+  return `Jira Epic: [${jiraKey}](${jiraUrl})`;
 }
 
 export function mergeGitHubDescription(existing, jiraKey, jiraUrl) {
@@ -1252,15 +1246,17 @@ async function ensureGitHubMilestoneLink(token, githubRepo, milestone, jiraKey, 
 
 function buildGitHubOnlyDryRunResult(config, milestone, issues) {
   const expectedSummary = buildExpectedSummary(config, milestone.title);
-  const hasManagedLink = Boolean(extractGitHubManagedBlock(milestone.description ?? ''));
+  const jiraKeyInMilestone = parseJiraKeyFromGitHubDescription(milestone.description ?? '');
   const plannedActions = [
     `prepare Jira ${config.jira.issueType} summary "${expectedSummary}"`,
     `create-or-update Jira ${config.jira.issueType} in project ${config.jira.project}`,
     'skip Jira-specific lookups and field resolution in GitHub-only dry-run',
   ];
 
-  if (!hasManagedLink) {
+  if (!jiraKeyInMilestone) {
     plannedActions.push('update GitHub milestone description with Jira link');
+  } else if (shouldUpdateGitHubMilestoneLink(milestone, jiraKeyInMilestone, config.jira.url)) {
+    plannedActions.push(`update GitHub milestone description with Jira link ${jiraKeyInMilestone}`);
   }
 
   return {

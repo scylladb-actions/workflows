@@ -249,9 +249,12 @@ test('resolveMilestoneSelectorsFromGitHubEvent returns an empty list for unrelat
   );
 });
 
-test('parseJiraKeyFromGitHubDescription reads managed link, plain URL, and plain key text', () => {
+test('parseJiraKeyFromGitHubDescription reads plain Jira link, URL, and key text', () => {
+  const plainLink = buildGitHubManagedBlock('DRIVER-12', 'https://jira.example/browse/DRIVER-12');
+
+  assert.doesNotMatch(plainLink, /jira-milestone-sync:start/);
   assert.equal(
-    parseJiraKeyFromGitHubDescription(buildGitHubManagedBlock('DRIVER-12', 'https://jira.example/browse/DRIVER-12')),
+    parseJiraKeyFromGitHubDescription(plainLink),
     'DRIVER-12',
   );
   assert.equal(
@@ -314,7 +317,7 @@ test('shouldPopulateConfiguredAssignee only fills assignee on create or when Jir
   );
 });
 
-test('mergeGitHubDescription replaces an existing managed block', () => {
+test('mergeGitHubDescription replaces an existing Jira Epic line', () => {
   const existing = [
     'Milestone body',
     '',
@@ -324,12 +327,14 @@ test('mergeGitHubDescription replaces an existing managed block', () => {
   const merged = mergeGitHubDescription(existing, 'DRIVER-2', 'https://jira.example/browse/DRIVER-2');
 
   assert.equal(stripGitHubManagedBlock(merged), 'Milestone body');
+  assert.equal(merged, 'Milestone body\n\nJira Epic: [DRIVER-2](https://jira.example/browse/DRIVER-2)');
   assert.match(merged, /DRIVER-2/);
   assert.doesNotMatch(merged, /DRIVER-1/);
+  assert.doesNotMatch(merged, /jira-milestone-sync:start/);
   assert.doesNotMatch(merged, /jira-milestone-sync:end/);
 });
 
-test('mergeGitHubDescription replaces a legacy managed block with a block that has no end marker', () => {
+test('mergeGitHubDescription replaces a legacy managed block with a plain Jira Epic line', () => {
   const existing = [
     'Milestone body',
     '',
@@ -341,9 +346,29 @@ test('mergeGitHubDescription replaces a legacy managed block with a block that h
   const merged = mergeGitHubDescription(existing, 'DRIVER-2', 'https://jira.example/browse/DRIVER-2');
 
   assert.equal(stripGitHubManagedBlock(merged), 'Milestone body');
+  assert.equal(merged, 'Milestone body\n\nJira Epic: [DRIVER-2](https://jira.example/browse/DRIVER-2)');
   assert.match(merged, /DRIVER-2/);
   assert.doesNotMatch(merged, /DRIVER-1/);
+  assert.doesNotMatch(merged, /jira-milestone-sync:start/);
   assert.doesNotMatch(merged, /jira-milestone-sync:end/);
+});
+
+test('mergeGitHubDescription removes duplicate legacy marker and keeps one plain Jira Epic line', () => {
+  const existing = [
+    'Jira Epic: [DRIVER-527](https://scylladb.atlassian.net/browse/DRIVER-527)',
+    '',
+    '<!-- jira-milestone-sync:start -->',
+    'Jira Epic: [DRIVER-527](https://scylladb.atlassian.net/browse/DRIVER-527)',
+  ].join('\n');
+
+  const merged = mergeGitHubDescription(
+    existing,
+    'DRIVER-527',
+    'https://scylladb.atlassian.net/browse/DRIVER-527',
+  );
+
+  assert.equal(merged, 'Jira Epic: [DRIVER-527](https://scylladb.atlassian.net/browse/DRIVER-527)');
+  assert.doesNotMatch(merged, /jira-milestone-sync:start/);
 });
 
 test('buildJiraManagedNodes renders milestone issues as bullet list items', () => {
