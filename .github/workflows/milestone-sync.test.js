@@ -2,11 +2,13 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 
 import {
+  buildExpectedSummary,
   buildGitHubManagedBlock,
   buildJiraManagedNodes,
   classifyIssueStatus,
   findSprintForDate,
   findNearestGitRoot,
+  formatReleaseTitle,
   formatSyncResultLine,
   getGitHubRepo,
   getGitHubRepoFromEnv,
@@ -64,6 +66,19 @@ test('normalizeConfig still accepts legacy nested jira keys', () => {
 
   assert.equal(config.jira.issueType, 'Epic');
   assert.equal(config.jira.assignee, 'Stanislaw Czech');
+});
+
+test('buildExpectedSummary adds a Release label to Jira summaries', () => {
+  const config = normalizeConfig({
+    Project: 'DRIVER',
+    'Issue Type': 'Epic',
+    'Summary Prefix': 'rust-driver:',
+  });
+
+  assert.equal(formatReleaseTitle('1.6.0'), 'Release 1.6.0');
+  assert.equal(formatReleaseTitle('Release 1.6.0'), 'Release 1.6.0');
+  assert.equal(buildExpectedSummary(config, '1.6.0'), 'rust-driver: Release 1.6.0');
+  assert.equal(buildExpectedSummary(config, 'Release 1.6.0'), 'rust-driver: Release 1.6.0');
 });
 
 test('getGitHubRepoFromEnv parses GITHUB_REPOSITORY', () => {
@@ -405,7 +420,7 @@ test('buildJiraManagedNodes renders milestone issues as bullet list items', () =
   });
 
   assert.equal(nodes[0].type, 'heading');
-  assert.equal(nodes[0].content[0].text, 'Release Release 1');
+  assert.equal(nodes[0].content[0].text, 'Release 1');
   assert.equal(nodes[0].content[0].marks[0].attrs.href, 'https://github.com/acme/repo/milestone/1');
   assert.equal(nodes[1].type, 'heading');
   assert.equal(nodes[1].content[0].text, 'Issues in this milestone');

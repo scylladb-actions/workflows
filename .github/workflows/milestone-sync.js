@@ -832,7 +832,7 @@ export function buildJiraManagedNodes({ milestone, issues }) {
     done: issues.filter((issue) => issue.workflowStatus?.key === 'done').length,
   };
   const nodes = [
-    createHeadingWithLink(`Release ${milestone.title}`, milestone.html_url, 1),
+    createHeadingWithLink(formatReleaseTitle(milestone.title), milestone.html_url, 1),
     createHeading('Issues in this milestone', 2),
   ];
 
@@ -899,9 +899,18 @@ function escapeRegExp(value) {
   return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
-function buildExpectedSummary(config, milestoneTitle) {
+function buildSummary(config, title) {
   const prefix = config.jira.summaryPrefix.trim();
-  return prefix ? `${prefix} ${milestoneTitle}`.trim() : milestoneTitle;
+  return prefix ? `${prefix} ${title}`.trim() : title;
+}
+
+export function formatReleaseTitle(milestoneTitle) {
+  const title = String(milestoneTitle).trim();
+  return /^release\b/i.test(title) ? title : `Release ${title}`.trim();
+}
+
+export function buildExpectedSummary(config, milestoneTitle) {
+  return buildSummary(config, formatReleaseTitle(milestoneTitle));
 }
 
 async function ensureScyllaComponentsOption(config, jira) {
@@ -1189,6 +1198,14 @@ async function buildJiraFields(config, jira, milestone, existingIssue, issues, s
   return fields;
 }
 
+async function findIssuesByExactSummary(jira, config, summary) {
+  const search = await jira.searchIssues(
+    `project = ${config.jira.project} AND issuetype = ${quoteJql(config.jira.issueType)} AND summary ~ ${quoteJql(summary)}`,
+    ['summary', 'description'],
+  );
+  return (search.issues ?? []).filter((issue) => issue.fields?.summary === summary);
+}
+
 async function findExistingEpic(jira, config, milestone, expectedSummary) {
   const jiraKeyInMilestone = parseJiraKeyFromGitHubDescription(milestone.description ?? '');
   if (jiraKeyInMilestone) {
@@ -1201,26 +1218,11 @@ async function findExistingEpic(jira, config, milestone, expectedSummary) {
     }
   }
 
-  const search = await jira.searchIssues(
-    `project = ${config.jira.project} AND issuetype = ${quoteJql(config.jira.issueType)} AND summary ~ ${quoteJql(expectedSummary)}`,
-    ['summary', 'description'],
-  );
-
-  const exactMatches = (search.issues ?? []).filter((issue) => issue.fields?.summary === expectedSummary);
+  const exactMatches = await findIssuesByExactSummary(jira, config, expectedSummary);
   if (exactMatches.length === 1) {
     return jira.getIssue(exactMatches[0].key);
   }
   if (exactMatches.length > 1) {
-    const remoteLinkMatches = [];
-    for (const issue of exactMatches) {
-      const remoteLinks = await jira.getRemoteLinks(issue.key);
-      if (remoteLinks.some((item) => item?.object?.url === milestone.html_url)) {
-        remoteLinkMatches.push(issue);
-      }
-    }
-    if (remoteLinkMatches.length === 1) {
-      return jira.getIssue(remoteLinkMatches[0].key);
-    }
     throw new Error(`Multiple Jira issues matched summary "${expectedSummary}". Add a Jira link to the milestone description to disambiguate.`);
   }
   return null;
