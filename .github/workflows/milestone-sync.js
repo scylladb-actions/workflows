@@ -522,6 +522,20 @@ class JiraClient {
     });
   }
 
+  async getTransitions(key) {
+    const response = await this.request(`/rest/api/3/issue/${encodeURIComponent(key)}/transitions`);
+    return response.transitions ?? [];
+  }
+
+  async transitionIssue(key, transitionId) {
+    return this.request(`/rest/api/3/issue/${encodeURIComponent(key)}/transitions`, {
+      method: 'POST',
+      body: JSON.stringify({
+        transition: { id: String(transitionId) },
+      }),
+    });
+  }
+
   async getRemoteLinks(key) {
     return this.request(`/rest/api/3/issue/${encodeURIComponent(key)}/remotelink`);
   }
@@ -1222,6 +1236,58 @@ async function hasJiraRemoteLink(jira, issueKey, milestoneUrl) {
   return remoteLinks.some((item) => item?.object?.url === milestoneUrl);
 }
 
+export function isJiraIssueDone(issue) {
+  const status = issue?.fields?.status;
+  if (status?.statusCategory?.key === 'done') {
+    return true;
+  }
+  const statusName = String(status?.name ?? '').trim().toLowerCase();
+  return ['done', 'closed', 'resolved'].includes(statusName);
+}
+
+export function selectJiraDoneTransition(transitions) {
+  const doneTransitions = (transitions ?? []).filter(
+    (transition) => transition?.to?.statusCategory?.key === 'done',
+  );
+  const preferredNames = ['done', 'close', 'closed', 'resolve', 'resolved', 'complete', 'completed'];
+
+  for (const preferredName of preferredNames) {
+    const match = doneTransitions.find((transition) => (
+      String(transition?.name ?? '').trim().toLowerCase() === preferredName
+      || String(transition?.to?.name ?? '').trim().toLowerCase() === preferredName
+    ));
+    if (match) {
+      return match;
+    }
+  }
+
+  return doneTransitions[0] ?? null;
+}
+
+async function shouldTransitionJiraIssueToDone(jira, issueKey, issue = null) {
+  const currentIssue = issue ?? await jira.getIssue(issueKey, ['status']);
+  return !isJiraIssueDone(currentIssue);
+}
+
+async function ensureJiraIssueDone(jira, issueKey, issue = null) {
+  if (!await shouldTransitionJiraIssueToDone(jira, issueKey, issue)) {
+    return false;
+  }
+
+  const transitions = await jira.getTransitions(issueKey);
+  const transition = selectJiraDoneTransition(transitions);
+  if (!transition?.id) {
+    const availableTransitions = transitions
+      .map((item) => item?.name)
+      .filter(Boolean)
+      .join(', ') || 'none';
+    throw new Error(`Jira issue ${issueKey} cannot be transitioned to Done; available transitions: ${availableTransitions}`);
+  }
+
+  await jira.transitionIssue(issueKey, transition.id);
+  return true;
+}
+
 function shouldUpdateGitHubMilestoneLink(milestone, jiraKey, jiraBaseUrl) {
   const nextDescription = mergeGitHubDescription(milestone.description ?? '', jiraKey, `${jiraBaseUrl}/browse/${jiraKey}`);
   return (milestone.description ?? '') !== nextDescription;
@@ -1257,6 +1323,9 @@ function buildGitHubOnlyDryRunResult(config, milestone, issues) {
     plannedActions.push('update GitHub milestone description with Jira link');
   } else if (shouldUpdateGitHubMilestoneLink(milestone, jiraKeyInMilestone, config.jira.url)) {
     plannedActions.push(`update GitHub milestone description with Jira link ${jiraKeyInMilestone}`);
+  }
+  if (milestone.state === 'closed') {
+    plannedActions.push(`transition Jira ${config.jira.issueType} to Done because milestone is closed`);
   }
 
   return {
@@ -1374,10 +1443,16 @@ async function syncMilestone(config, milestoneSelector) {
     } else {
       plannedActions.push('update GitHub milestone description with the created Jira link');
     }
+    if (milestone.state === 'closed' && (!existingEpic || !isJiraIssueDone(existingEpic))) {
+      plannedActions.push(`transition Jira issue ${jiraKey ?? 'after creation'} to Done because milestone is closed`);
+    }
   } else {
     await ensureSprintAssignment(jira, jiraKey, sprint);
     await ensureJiraRemoteLink(jira, jiraKey, milestone, githubRepo);
     await ensureGitHubMilestoneLink(githubToken, githubRepo, milestone, jiraKey, config.jira.url);
+    if (milestone.state === 'closed') {
+      await ensureJiraIssueDone(jira, jiraKey, existingEpic);
+    }
   }
 
   return {

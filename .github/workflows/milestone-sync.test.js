@@ -13,6 +13,7 @@ import {
   hasMilestoneDueDate,
   isDryRunEnabled,
   isGitHubOnlyDryRunEnabled,
+  isJiraIssueDone,
   mergeGitHubDescription,
   mergeJiraDescription,
   normalizeConfig,
@@ -20,6 +21,7 @@ import {
   parseGitHubRepoFromRemoteUrl,
   quarterLabelFromDate,
   resolveMilestoneSelectorsFromGitHubEvent,
+  selectJiraDoneTransition,
   shouldPopulateConfiguredAssignee,
   stripGitHubManagedBlock,
 } from './milestone-sync.js';
@@ -315,6 +317,23 @@ test('shouldPopulateConfiguredAssignee only fills assignee on create or when Jir
     shouldPopulateConfiguredAssignee({ fields: { assignee: { displayName: 'Stanislaw Czech' } } }),
     false,
   );
+});
+
+test('isJiraIssueDone recognizes Jira done category and common done statuses', () => {
+  assert.equal(isJiraIssueDone({ fields: { status: { statusCategory: { key: 'done' }, name: 'Released' } } }), true);
+  assert.equal(isJiraIssueDone({ fields: { status: { statusCategory: { key: 'new' }, name: 'Closed' } } }), true);
+  assert.equal(isJiraIssueDone({ fields: { status: { statusCategory: { key: 'indeterminate' }, name: 'In Progress' } } }), false);
+});
+
+test('selectJiraDoneTransition chooses a preferred transition into Jira done category', () => {
+  const transition = selectJiraDoneTransition([
+    { id: '1', name: 'Cancel', to: { name: 'Cancelled', statusCategory: { key: 'done' } } },
+    { id: '2', name: 'Done', to: { name: 'Done', statusCategory: { key: 'done' } } },
+    { id: '3', name: 'Start Progress', to: { name: 'In Progress', statusCategory: { key: 'indeterminate' } } },
+  ]);
+
+  assert.equal(transition.id, '2');
+  assert.equal(selectJiraDoneTransition([{ id: '3', name: 'Start Progress', to: { statusCategory: { key: 'indeterminate' } } }]), null);
 });
 
 test('mergeGitHubDescription replaces an existing Jira Epic line', () => {
